@@ -1,0 +1,551 @@
+import express, { type Express, Request, Response } from "express";
+import { createServer, type Server } from "http";
+import { storage } from "./storage";
+import { 
+  insertTheorySchema, insertHypothesisSchema, insertProjectSchema, 
+  insertExperimentSchema, insertResourceSchema, insertLearningProgressSchema
+} from "@shared/schema";
+import { z } from "zod";
+import { fromZodError } from "zod-validation-error";
+
+export async function registerRoutes(app: Express): Promise<Server> {
+  const router = express.Router();
+
+  // Helper for validating request body
+  function validateBody<T>(schema: z.ZodType<T>) {
+    return (req: Request, res: Response, next: Function) => {
+      try {
+        req.body = schema.parse(req.body);
+        next();
+      } catch (error) {
+        if (error instanceof z.ZodError) {
+          const validationError = fromZodError(error);
+          return res.status(400).json({ message: validationError.message });
+        }
+        return res.status(400).json({ message: "Invalid request body" });
+      }
+    };
+  }
+
+  // Mock authentication - in a real app would use proper auth
+  // For now, we'll use a hardcoded user ID
+  const getUserId = (req: Request): number => {
+    return 1; // Default to first user (Alex)
+  };
+
+  // Theories endpoints
+  router.get("/theories", async (req: Request, res: Response) => {
+    const userId = getUserId(req);
+    const theories = await storage.getTheoriesByUserId(userId);
+    
+    // For each theory, get the hypotheses count
+    const theoriesWithHypotheses = await Promise.all(
+      theories.map(async (theory) => {
+        const hypotheses = await storage.getHypothesesByTheoryId(theory.id);
+        return {
+          ...theory,
+          hypothesesCount: hypotheses.length
+        };
+      })
+    );
+    
+    res.json(theoriesWithHypotheses);
+  });
+
+  router.get("/theories/:id", async (req: Request, res: Response) => {
+    const theoryId = parseInt(req.params.id);
+    const theory = await storage.getTheory(theoryId);
+    
+    if (!theory) {
+      return res.status(404).json({ message: "Theory not found" });
+    }
+    
+    const hypotheses = await storage.getHypothesesByTheoryId(theoryId);
+    
+    res.json({
+      ...theory,
+      hypotheses
+    });
+  });
+
+  router.post("/theories", validateBody(insertTheorySchema), async (req: Request, res: Response) => {
+    const userId = getUserId(req);
+    const theory = await storage.createTheory(req.body, userId);
+    res.status(201).json(theory);
+  });
+
+  router.put("/theories/:id", validateBody(insertTheorySchema.partial()), async (req: Request, res: Response) => {
+    const theoryId = parseInt(req.params.id);
+    const updatedTheory = await storage.updateTheory(theoryId, req.body);
+    
+    if (!updatedTheory) {
+      return res.status(404).json({ message: "Theory not found" });
+    }
+    
+    res.json(updatedTheory);
+  });
+
+  router.delete("/theories/:id", async (req: Request, res: Response) => {
+    const theoryId = parseInt(req.params.id);
+    const success = await storage.deleteTheory(theoryId);
+    
+    if (!success) {
+      return res.status(404).json({ message: "Theory not found" });
+    }
+    
+    res.status(204).send();
+  });
+
+  // Hypotheses endpoints
+  router.get("/theories/:theoryId/hypotheses", async (req: Request, res: Response) => {
+    const theoryId = parseInt(req.params.theoryId);
+    const hypotheses = await storage.getHypothesesByTheoryId(theoryId);
+    res.json(hypotheses);
+  });
+
+  router.post("/theories/:theoryId/hypotheses", validateBody(insertHypothesisSchema), async (req: Request, res: Response) => {
+    const theoryId = parseInt(req.params.theoryId);
+    const theory = await storage.getTheory(theoryId);
+    
+    if (!theory) {
+      return res.status(404).json({ message: "Theory not found" });
+    }
+    
+    const hypothesis = await storage.createHypothesis(req.body, theoryId);
+    res.status(201).json(hypothesis);
+  });
+
+  router.put("/hypotheses/:id", validateBody(insertHypothesisSchema.partial()), async (req: Request, res: Response) => {
+    const hypothesisId = parseInt(req.params.id);
+    const updatedHypothesis = await storage.updateHypothesis(hypothesisId, req.body);
+    
+    if (!updatedHypothesis) {
+      return res.status(404).json({ message: "Hypothesis not found" });
+    }
+    
+    res.json(updatedHypothesis);
+  });
+
+  router.put("/hypotheses/:id/verify", async (req: Request, res: Response) => {
+    const hypothesisId = parseInt(req.params.id);
+    const isVerified = req.body.isVerified === true;
+    
+    const updatedHypothesis = await storage.verifyHypothesis(hypothesisId, isVerified);
+    
+    if (!updatedHypothesis) {
+      return res.status(404).json({ message: "Hypothesis not found" });
+    }
+    
+    res.json(updatedHypothesis);
+  });
+
+  router.delete("/hypotheses/:id", async (req: Request, res: Response) => {
+    const hypothesisId = parseInt(req.params.id);
+    const success = await storage.deleteHypothesis(hypothesisId);
+    
+    if (!success) {
+      return res.status(404).json({ message: "Hypothesis not found" });
+    }
+    
+    res.status(204).send();
+  });
+
+  // Projects endpoints
+  router.get("/projects", async (req: Request, res: Response) => {
+    const userId = getUserId(req);
+    const projects = await storage.getProjectsByUserId(userId);
+    
+    // For each project, get the experiments count
+    const projectsWithExperiments = await Promise.all(
+      projects.map(async (project) => {
+        const experiments = await storage.getExperimentsByProjectId(project.id);
+        return {
+          ...project,
+          experimentsCount: experiments.length
+        };
+      })
+    );
+    
+    res.json(projectsWithExperiments);
+  });
+
+  router.get("/projects/:id", async (req: Request, res: Response) => {
+    const projectId = parseInt(req.params.id);
+    const project = await storage.getProject(projectId);
+    
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+    
+    const experiments = await storage.getExperimentsByProjectId(projectId);
+    
+    res.json({
+      ...project,
+      experiments
+    });
+  });
+
+  router.post("/projects", validateBody(insertProjectSchema), async (req: Request, res: Response) => {
+    const userId = getUserId(req);
+    const project = await storage.createProject(req.body, userId);
+    res.status(201).json(project);
+  });
+
+  router.put("/projects/:id", validateBody(insertProjectSchema.partial()), async (req: Request, res: Response) => {
+    const projectId = parseInt(req.params.id);
+    const updatedProject = await storage.updateProject(projectId, req.body);
+    
+    if (!updatedProject) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+    
+    res.json(updatedProject);
+  });
+
+  router.delete("/projects/:id", async (req: Request, res: Response) => {
+    const projectId = parseInt(req.params.id);
+    const success = await storage.deleteProject(projectId);
+    
+    if (!success) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+    
+    res.status(204).send();
+  });
+
+  // Experiments endpoints
+  router.get("/projects/:projectId/experiments", async (req: Request, res: Response) => {
+    const projectId = parseInt(req.params.projectId);
+    const experiments = await storage.getExperimentsByProjectId(projectId);
+    res.json(experiments);
+  });
+
+  router.post("/projects/:projectId/experiments", validateBody(insertExperimentSchema), async (req: Request, res: Response) => {
+    const projectId = parseInt(req.params.projectId);
+    const project = await storage.getProject(projectId);
+    
+    if (!project) {
+      return res.status(404).json({ message: "Project not found" });
+    }
+    
+    const experiment = await storage.createExperiment(req.body, projectId);
+    res.status(201).json(experiment);
+  });
+
+  router.put("/experiments/:id", validateBody(insertExperimentSchema.partial()), async (req: Request, res: Response) => {
+    const experimentId = parseInt(req.params.id);
+    const updatedExperiment = await storage.updateExperiment(experimentId, req.body);
+    
+    if (!updatedExperiment) {
+      return res.status(404).json({ message: "Experiment not found" });
+    }
+    
+    res.json(updatedExperiment);
+  });
+
+  router.put("/experiments/:id/complete", async (req: Request, res: Response) => {
+    const experimentId = parseInt(req.params.id);
+    const results = req.body.results || "";
+    
+    const updatedExperiment = await storage.completeExperiment(experimentId, results);
+    
+    if (!updatedExperiment) {
+      return res.status(404).json({ message: "Experiment not found" });
+    }
+    
+    res.json(updatedExperiment);
+  });
+
+  router.delete("/experiments/:id", async (req: Request, res: Response) => {
+    const experimentId = parseInt(req.params.id);
+    const success = await storage.deleteExperiment(experimentId);
+    
+    if (!success) {
+      return res.status(404).json({ message: "Experiment not found" });
+    }
+    
+    res.status(204).send();
+  });
+
+  // Resources endpoints
+  router.get("/resources", async (req: Request, res: Response) => {
+    const userId = getUserId(req);
+    const resources = await storage.getResourcesByUserId(userId);
+    res.json(resources);
+  });
+
+  router.get("/resources/:id", async (req: Request, res: Response) => {
+    const resourceId = parseInt(req.params.id);
+    const resource = await storage.getResource(resourceId);
+    
+    if (!resource) {
+      return res.status(404).json({ message: "Resource not found" });
+    }
+    
+    res.json(resource);
+  });
+
+  router.post("/resources", validateBody(insertResourceSchema), async (req: Request, res: Response) => {
+    const userId = getUserId(req);
+    const resource = await storage.createResource(req.body, userId);
+    res.status(201).json(resource);
+  });
+
+  router.put("/resources/:id", validateBody(insertResourceSchema.partial()), async (req: Request, res: Response) => {
+    const resourceId = parseInt(req.params.id);
+    const updatedResource = await storage.updateResource(resourceId, req.body);
+    
+    if (!updatedResource) {
+      return res.status(404).json({ message: "Resource not found" });
+    }
+    
+    res.json(updatedResource);
+  });
+
+  router.delete("/resources/:id", async (req: Request, res: Response) => {
+    const resourceId = parseInt(req.params.id);
+    const success = await storage.deleteResource(resourceId);
+    
+    if (!success) {
+      return res.status(404).json({ message: "Resource not found" });
+    }
+    
+    res.status(204).send();
+  });
+
+  // Learning Progress endpoints
+  router.get("/learning-progress", async (req: Request, res: Response) => {
+    const userId = getUserId(req);
+    const progress = await storage.getLearningProgressByUserId(userId);
+    res.json(progress);
+  });
+
+  router.post("/learning-progress", validateBody(insertLearningProgressSchema), async (req: Request, res: Response) => {
+    const userId = getUserId(req);
+    const progress = await storage.createLearningProgress(req.body, userId);
+    res.status(201).json(progress);
+  });
+
+  router.put("/learning-progress/:id", async (req: Request, res: Response) => {
+    const progressId = parseInt(req.params.id);
+    const progress = req.body.progress || 0;
+    
+    const updatedProgress = await storage.updateLearningProgress(progressId, progress);
+    
+    if (!updatedProgress) {
+      return res.status(404).json({ message: "Learning progress not found" });
+    }
+    
+    res.json(updatedProgress);
+  });
+
+  // Activities endpoint
+  router.get("/activities", async (req: Request, res: Response) => {
+    const userId = getUserId(req);
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+    const activities = await storage.getActivitiesByUserId(userId, limit);
+    res.json(activities);
+  });
+
+  // User endpoints
+  router.get("/user/current", async (req: Request, res: Response) => {
+    const userId = getUserId(req);
+    const user = await storage.getUser(userId);
+    
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    
+    // Don't send password in response
+    const { password, ...userWithoutPassword } = user;
+    res.json(userWithoutPassword);
+  });
+
+  // Summary/Dashboard data
+  router.get("/dashboard", async (req: Request, res: Response) => {
+    const userId = getUserId(req);
+    
+    // Get user data
+    const user = await storage.getUser(userId);
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+    
+    // Get theories
+    const theories = await storage.getTheoriesByUserId(userId);
+    const activeTheories = theories.filter(theory => theory.status === "active");
+    
+    // Get projects
+    const projects = await storage.getProjectsByUserId(userId);
+    const ongoingProjects = projects.filter(project => project.status === "in_progress");
+    
+    // Get recent activities
+    const recentActivities = await storage.getActivitiesByUserId(userId, 5);
+    
+    // Get learning progress
+    const learningProgress = await storage.getLearningProgressByUserId(userId);
+    
+    // Mock streak data (would come from a real database in production)
+    const streakDays = 7;
+    
+    res.json({
+      user: {
+        id: user.id,
+        displayName: user.displayName
+      },
+      stats: {
+        activeTheories: activeTheories.length,
+        ongoingProjects: ongoingProjects.length,
+        streak: streakDays
+      },
+      recentActivities,
+      learningProgress
+    });
+  });
+
+  // Initialize some data for demo
+  await initializeDemoData();
+
+  // Register api router
+  app.use("/api", router);
+
+  const httpServer = createServer(app);
+  return httpServer;
+}
+
+// Initialize some demo data
+async function initializeDemoData() {
+  const userId = 1; // Default user (Alex)
+  
+  // Check if we already have data
+  const theories = await storage.getTheoriesByUserId(userId);
+  if (theories.length > 0) return; // Already initialized
+  
+  // Create theories
+  const cognitiveLoadTheory = await storage.createTheory({
+    title: "Cognitive Load Theory",
+    description: "Investigating how cognitive load affects learning outcomes and memory retention in educational settings.",
+    status: "active"
+  }, userId);
+  
+  const spacedRepetitionTheory = await storage.createTheory({
+    title: "Spaced Repetition Effects",
+    description: "Exploring how spacing learning sessions affects long-term retention compared to massed learning approaches.",
+    status: "in_progress"
+  }, userId);
+  
+  const motivationTheory = await storage.createTheory({
+    title: "Motivation & Learning",
+    description: "Examining the role of intrinsic and extrinsic motivation in educational achievement and persistence.",
+    status: "draft"
+  }, userId);
+  
+  // Create hypotheses
+  await storage.createHypothesis({
+    title: "Split-attention effect during learning",
+    description: "The split-attention effect will significantly impair learning performance in multimedia materials."
+  }, cognitiveLoadTheory.id);
+  
+  await storage.createHypothesis({
+    title: "Working memory limitations",
+    description: "Working memory capacity constraints directly affect learning efficiency in complex tasks."
+  }, cognitiveLoadTheory.id);
+  
+  await storage.createHypothesis({
+    title: "Optimal spacing intervals",
+    description: "There exists an optimal interval for spaced repetition that maximizes long-term retention."
+  }, spacedRepetitionTheory.id);
+  
+  await storage.createHypothesis({
+    title: "Subject matter differences",
+    description: "The effectiveness of spaced repetition varies depending on the complexity of the subject matter."
+  }, spacedRepetitionTheory.id);
+  
+  await storage.createHypothesis({
+    title: "Individual learning differences",
+    description: "Individual differences in cognitive abilities moderate the effects of spaced repetition."
+  }, spacedRepetitionTheory.id);
+  
+  await storage.createHypothesis({
+    title: "Reward structures impact",
+    description: "Different reward structures will impact motivation and persistence in learning tasks."
+  }, motivationTheory.id);
+  
+  // Create projects
+  const memoryRetentionProject = await storage.createProject({
+    title: "Memory Retention Study",
+    description: "Experimental study of techniques to improve long-term memory retention in educational contexts.",
+    status: "in_progress",
+    dueDate: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000) // 14 days from now
+  }, userId);
+  
+  const educationalGameProject = await storage.createProject({
+    title: "Educational Game Design",
+    description: "Designing and testing an educational game that implements spaced repetition principles.",
+    status: "in_progress",
+    dueDate: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days from now
+  }, userId);
+  
+  const motivationSurveyProject = await storage.createProject({
+    title: "Student Motivation Survey",
+    description: "Survey research on factors affecting student motivation in online learning environments.",
+    status: "planned",
+    dueDate: new Date(Date.now() + 60 * 24 * 60 * 60 * 1000) // 60 days from now
+  }, userId);
+  
+  // Create experiments
+  await storage.createExperiment({
+    title: "Spaced Repetition Test",
+    description: "Testing the effect of varied spaced intervals on vocabulary retention",
+    methodology: "Randomized controlled trial with three experimental groups and one control group",
+    results: "Completed with positive results showing 42% improvement in retention"
+  }, memoryRetentionProject.id);
+  
+  await storage.createExperiment({
+    title: "Cognitive Load Assessment",
+    description: "Measuring cognitive load during different learning activities",
+    methodology: "Using dual-task paradigm and self-reported mental effort ratings"
+  }, memoryRetentionProject.id);
+  
+  // Create resources
+  await storage.createResource({
+    title: "Cognitive Load Theory: Research that Teachers Really Need to Understand",
+    description: "Comprehensive review of cognitive load theory and its application in education",
+    url: "https://example.com/cognitive-load-theory",
+    type: "article",
+    tags: "cognitive,education,theory"
+  }, userId);
+  
+  await storage.createResource({
+    title: "Make It Stick: The Science of Successful Learning",
+    description: "Book on evidence-based learning techniques including spaced repetition",
+    url: "https://example.com/make-it-stick",
+    type: "book",
+    tags: "learning,retention,education"
+  }, userId);
+  
+  // Create learning progress
+  await storage.createLearningProgress({
+    topic: "Scientific Method",
+    progress: 85,
+    totalSteps: 100
+  }, userId);
+  
+  await storage.createLearningProgress({
+    topic: "Hypothesis Testing",
+    progress: 62,
+    totalSteps: 100
+  }, userId);
+  
+  await storage.createLearningProgress({
+    topic: "Research Methods",
+    progress: 40,
+    totalSteps: 100
+  }, userId);
+  
+  await storage.createLearningProgress({
+    topic: "Data Analysis",
+    progress: 20,
+    totalSteps: 100
+  }, userId);
+}
